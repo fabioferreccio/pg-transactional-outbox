@@ -5,13 +5,13 @@
  * Suitable for 10,000 - 50,000 events/sec.
  */
 
-import type { Pool, PoolClient } from "pg";
 import type { OutboxRepositoryPort } from "../../core/ports/outbox-repository.port.js";
 import type { EventPublisherPort } from "../../core/ports/event-publisher.port.js";
 import {
   ProcessOutboxUseCase,
   type ProcessOutboxConfig,
 } from "../../core/use-cases/process-outbox.use-case.js";
+import { NotificationListener } from "./notification-listener.js";
 
 export interface NotifyRelayConfig {
   channel: string;
@@ -23,13 +23,12 @@ export interface NotifyRelayConfig {
 
 export class NotifyRelay {
   private isRunning = false;
-  private client?: PoolClient;
   private debounceTimer?: NodeJS.Timeout;
 
   private readonly processUseCase: ProcessOutboxUseCase;
 
   constructor(
-    private readonly pool: Pool,
+    private readonly listener: NotificationListener,
     private readonly repository: OutboxRepositoryPort,
     private readonly publisher: EventPublisherPort,
     private readonly config: NotifyRelayConfig,
@@ -54,18 +53,13 @@ export class NotifyRelay {
 
     this.isRunning = true;
 
-    // Get dedicated connection for LISTEN
-    this.client = await this.pool.connect();
+    // Connect listener
+    await this.listener.connect();
 
-    // Setup notification handler
-    this.client.on("notification", (msg) => {
-      if (msg.channel === this.config.channel) {
-        this.onNotification();
-      }
-    });
-
-    // Subscribe to channel
-    await this.client.query(`LISTEN ${this.config.channel}`);
+    // Listen to channel
+    await this.listener.listen(this.config.channel, () =>
+      this.onNotification(),
+    );
 
     console.log(
       `[NotifyRelay] Worker ${this.config.workerId} listening on ${this.config.channel}`,
@@ -84,11 +78,8 @@ export class NotifyRelay {
       clearTimeout(this.debounceTimer);
     }
 
-    if (this.client) {
-      await this.client.query(`UNLISTEN ${this.config.channel}`);
-      this.client.release();
-      this.client = undefined;
-    }
+    await this.listener.unlisten(this.config.channel);
+    await this.listener.close();
 
     console.log(`[NotifyRelay] Worker ${this.config.workerId} stopped`);
   }

@@ -273,5 +273,16 @@ SELECT
   last_autovacuum,
   autovacuum_count
 FROM pg_stat_user_tables
-WHERE relname LIKE 'outbox%'
   AND n_dead_tup > 1000;
+
+-- ========================================
+-- INBOX TABLE (Idempotency)
+-- ========================================
+
+CREATE TABLE IF NOT EXISTS inbox (
+  id             BIGSERIAL PRIMARY KEY,
+  tracking_id    VARCHAR(255) NOT NULL,
+  consumer_id    VARCHAR(255) NOT NULL,
+  processed_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tracking_id, consumer_id)
+);

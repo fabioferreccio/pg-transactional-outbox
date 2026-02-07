@@ -242,15 +242,17 @@ export class OutboxWorker extends EventEmitter {
         await this.handleFailure(event, result.error ?? "Unknown error");
       }
     } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : String(err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
       await this.handleFailure(event, errorMessage);
     } finally {
       this.stopHeartbeat(eventKey);
     }
   }
 
-  private async handleFailure(event: OutboxEvent, error: string): Promise<void> {
+  private async handleFailure(
+    event: OutboxEvent,
+    error: string,
+  ): Promise<void> {
     const eventId = event.id!;
 
     if (event.canRetry()) {
@@ -259,7 +261,7 @@ export class OutboxWorker extends EventEmitter {
         event.retryCount,
         this.config.retryPolicy,
       );
-      
+
       await this.repository.markFailed(eventId, this.workerId, error);
       this.emit("failed", { id: eventId, error });
     } else {

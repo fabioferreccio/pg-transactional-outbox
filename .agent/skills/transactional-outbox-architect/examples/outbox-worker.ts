@@ -1,36 +1,17 @@
 /**
- * Transactional Outbox Worker for Node.js
+ * Transactional Outbox Worker
  * 
- * Aligned with Project Principles:
- * - Lease-based locking with active heartbeat
- * - Fencing token protection against zombie workers
- * - Tracking ID for consumer idempotency
- * - Backpressure-aware stream processing
- * - Configurable concurrency and batching
- * - Exponential backoff with jitter
- * - Graceful shutdown
+ * Agnostic Worker using Ports and Adapters.
+ * Can run with Postgres, MySQL, or In-Memory adapters.
  */
 
-import { Pool } from 'pg';
 import { EventEmitter } from 'events';
+import { OutboxEvent } from '../../../../src/core/domain/entities/outbox-event.js';
+import { OutboxRepositoryPort } from '../../../../src/core/ports/outbox-repository.port.js';
 
 // ============================================
 // Types
 // ============================================
-
-export interface OutboxEvent {
-  id: bigint;
-  tracking_id: string;         // Idempotency key for consumers
-  aggregate_id: string;
-  aggregate_type: string;
-  event_type: string;
-  payload: unknown;
-  metadata: Record<string, unknown>;
-  created_at: Date;
-  retry_count: number;
-  lock_token: bigint;
-  locked_until: Date;
-}
 
 export interface WorkerConfig {
   batchSize: number;
@@ -48,26 +29,22 @@ export interface WorkerConfig {
 export type EventHandler = (event: OutboxEvent) => Promise<void>;
 
 // ============================================
-// Outbox Worker with Lease & Heartbeat
+// Outbox Worker
 // ============================================
 
 export class OutboxWorker extends EventEmitter {
-  private pool: Pool;
   private config: WorkerConfig;
-  private handler: EventHandler;
   private workerId: bigint;
   private running = false;
   private heartbeatTimers: Map<string, NodeJS.Timeout> = new Map();
   private reaperTimer: NodeJS.Timeout | null = null;
 
   constructor(
-    pool: Pool,
-    handler: EventHandler,
+    private readonly repository: OutboxRepositoryPort,
+    private readonly handler: EventHandler,
     config: Partial<WorkerConfig> = {}
   ) {
     super();
-    this.pool = pool;
-    this.handler = handler;
     this.config = {
       batchSize: 100,
       pollIntervalMs: 1000,
@@ -135,7 +112,7 @@ export class OutboxWorker extends EventEmitter {
   private startReaper(): void {
     this.reaperTimer = setInterval(async () => {
       try {
-        const recovered = await this.runReaper();
+        const recovered = await this.repository.recoverStaleEvents();
         if (recovered > 0) {
           this.emit('reaper', { recovered });
         }
@@ -145,76 +122,32 @@ export class OutboxWorker extends EventEmitter {
     }, this.config.reaperIntervalMs);
   }
 
-  private async runReaper(): Promise<number> {
-    const { rows } = await this.pool.query(`
-      UPDATE outbox
-      SET 
-        status = 'PENDING',
-        locked_until = NULL,
-        lock_token = NULL
-      WHERE status = 'PROCESSING'
-        AND locked_until < NOW()
-      RETURNING id, event_type, retry_count
-    `);
-
-    for (const row of rows) {
-      this.emit('recovered', { 
-        id: row.id, 
-        eventType: row.event_type,
-        retryCount: row.retry_count 
-      });
-    }
-
-    return rows.length;
-  }
-
   // ============================================
   // Batch Processing
   // ============================================
 
   private async processBatch(): Promise<number> {
-    const client = await this.pool.connect();
-    
     try {
-      await client.query('BEGIN');
-      
-      // Claim batch with lease
-      const { rows } = await client.query<OutboxEvent>(`
-        UPDATE outbox
-        SET 
-          status = 'PROCESSING',
-          processed_at = NOW(),
-          locked_until = NOW() + INTERVAL '${this.config.leaseSeconds} seconds',
-          lock_token = $1
-        WHERE id IN (
-          SELECT id 
-          FROM outbox
-          WHERE status = 'PENDING'
-            AND created_at < NOW() - INTERVAL '100 milliseconds'
-          ORDER BY created_at ASC
-          LIMIT $2
-          FOR UPDATE SKIP LOCKED
-        )
-        RETURNING *
-      `, [this.workerId.toString(), this.config.batchSize]);
+      // Claim batch with lease via Repository
+      const events = await this.repository.claimBatch({
+        batchSize: this.config.batchSize,
+        leaseSeconds: this.config.leaseSeconds,
+        lockToken: this.workerId
+      });
 
-      await client.query('COMMIT');
-
-      if (rows.length === 0) {
+      if (events.length === 0) {
         return 0;
       }
 
       // Process with concurrency limit and heartbeats
-      await this.processWithConcurrency(rows);
+      await this.processWithConcurrency(events);
       
-      this.emit('batch', { count: rows.length });
-      return rows.length;
+      this.emit('batch', { count: events.length });
+      return events.length;
 
     } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+      this.emit('error', err);
+      return 0;
     }
   }
 
@@ -239,21 +172,35 @@ export class OutboxWorker extends EventEmitter {
 
   private async processEvent(event: OutboxEvent): Promise<void> {
     const eventKey = event.id.toString();
-    
+    const lockToken = event.lockToken!; // exist because we claimed it
+
     // Start heartbeat for this event
     this.startHeartbeat(event);
 
     try {
       await this.handler(event);
-      await this.markCompleted(event);
+      await this.repository.markCompleted(event.id, lockToken);
+      
       this.emit('processed', { 
         id: event.id, 
-        trackingId: event.tracking_id,
-        eventType: event.event_type 
+        trackingId: event.trackingId,
+        eventType: event.eventType 
       });
     } catch (err) {
-      await this.markFailed(event, err as Error);
-      this.emit('failed', { event, error: err });
+      const error = err as Error;
+      const isDeadLetter = event.retryCount + 1 >= this.config.maxRetries;
+      
+      if (isDeadLetter) {
+        await this.repository.markDeadLetter(event.id, lockToken, error.message);
+        this.emit('dead-letter', { 
+          id: event.id, 
+          trackingId: event.trackingId, 
+          error: error.message 
+        });
+      } else {
+        await this.repository.markFailed(event.id, lockToken, error.message);
+        this.emit('failed', { event, error: err });
+      }
     } finally {
       // Stop heartbeat
       this.stopHeartbeat(eventKey);
@@ -263,9 +210,12 @@ export class OutboxWorker extends EventEmitter {
   private startHeartbeat(event: OutboxEvent): void {
     const eventKey = event.id.toString();
     
+    // Safety check: ensure lockToken exists
+    if (!event.lockToken) return;
+
     const timer = setInterval(async () => {
       try {
-        await this.renewLease(event);
+        await this.repository.renewLease(event.id, event.lockToken!, this.config.leaseSeconds);
         this.emit('heartbeat', { id: event.id });
       } catch (err) {
         this.emit('error', err);
@@ -280,59 +230,6 @@ export class OutboxWorker extends EventEmitter {
     if (timer) {
       clearInterval(timer);
       this.heartbeatTimers.delete(eventKey);
-    }
-  }
-
-  private async renewLease(event: OutboxEvent): Promise<void> {
-    await this.pool.query(`
-      UPDATE outbox 
-      SET locked_until = NOW() + INTERVAL '${this.config.leaseSeconds} seconds'
-      WHERE id = $1 
-        AND lock_token = $2
-        AND status = 'PROCESSING'
-    `, [event.id.toString(), event.lock_token.toString()]);
-  }
-
-  // ============================================
-  // Status Updates
-  // ============================================
-
-  private async markCompleted(event: OutboxEvent): Promise<void> {
-    await this.pool.query(`
-      UPDATE outbox
-      SET 
-        status = 'COMPLETED', 
-        processed_at = NOW(),
-        locked_until = NULL
-      WHERE id = $1 AND lock_token = $2
-    `, [event.id.toString(), event.lock_token.toString()]);
-  }
-
-  private async markFailed(event: OutboxEvent, error: Error): Promise<void> {
-    const isDeadLetter = event.retry_count + 1 >= this.config.maxRetries;
-    
-    await this.pool.query(`
-      UPDATE outbox
-      SET 
-        status = $3,
-        retry_count = retry_count + 1,
-        last_error = $4,
-        processed_at = NOW(),
-        locked_until = NULL
-      WHERE id = $1 AND lock_token = $2
-    `, [
-      event.id.toString(),
-      event.lock_token.toString(),
-      isDeadLetter ? 'DEAD_LETTER' : 'PENDING',
-      error.message.slice(0, 1000),
-    ]);
-
-    if (isDeadLetter) {
-      this.emit('dead-letter', { 
-        id: event.id, 
-        trackingId: event.tracking_id,
-        error: error.message 
-      });
     }
   }
 
@@ -391,93 +288,29 @@ export function calculateBackoff(
   return Math.floor(exponential + jitter);
 }
 
-/**
- * Generate idempotency key from tracking_id + fencing token
- * Use this when calling external APIs (e.g., Stripe)
- */
-export function generateIdempotencyKey(
-  trackingId: string,
-  fencingToken: bigint
-): string {
-  return `${trackingId}-${fencingToken.toString()}`;
-}
-
-/**
- * Check if an event was already processed (consumer-side idempotency)
- */
-export async function checkIdempotency(
-  pool: Pool,
-  trackingId: string
-): Promise<boolean> {
-  const { rows } = await pool.query(`
-    SELECT EXISTS (
-      SELECT 1 FROM outbox 
-      WHERE tracking_id = $1 
-        AND status = 'COMPLETED'
-    ) AS processed
-  `, [trackingId]);
-  
-  return rows[0]?.processed ?? false;
-}
-
 // ============================================
 // Usage Example
 // ============================================
 
 /*
 import { Pool } from 'pg';
-import { OutboxWorker, checkIdempotency, generateIdempotencyKey } from './outbox-worker';
+import { OutboxWorker } from './outbox-worker';
+import { PostgresOutboxRepository } from 'pg-transactional-outbox';
+import { PgSqlExecutor } from 'pg-transactional-outbox';
 
+// 1. Setup Adapter (Postgres, Prisma, Knex...)
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const executor = new PgSqlExecutor(pool);
+const repository = new PostgresOutboxRepository(executor);
 
+// 2. Start Worker (Agnostic)
 const worker = new OutboxWorker(
-  pool,
+  repository,
   async (event) => {
-    // IMPORTANT: Consumer idempotency check
-    const alreadyProcessed = await checkIdempotency(pool, event.tracking_id);
-    if (alreadyProcessed) {
-      console.log('Skipping duplicate:', event.tracking_id);
-      return;
-    }
-
-    // Your event processing logic
-    await publishToKafka(event.payload);
-    
-    // External API with idempotency key
-    await stripe.charges.create(
-      { ...event.payload },
-      { idempotencyKey: generateIdempotencyKey(event.tracking_id, event.lock_token) }
-    );
-  },
-  {
-    batchSize: 100,
-    concurrency: 10,
-    leaseSeconds: 30,
-    heartbeatIntervalMs: 10000,
-    reaperEnabled: true,
+    console.log('Doing work:', event.payload);
+    // ... logic
   }
 );
 
-// Event handlers
-worker.on('processed', ({ id, trackingId }) => 
-  console.log('Processed:', id, trackingId));
-worker.on('failed', ({ event, error }) => 
-  console.error('Failed:', event.id, error));
-worker.on('dead-letter', ({ id, trackingId, error }) => 
-  console.error('DLE:', id, trackingId, error));
-worker.on('reaper', ({ recovered }) => 
-  console.log('Reaper recovered:', recovered, 'events'));
-worker.on('heartbeat', ({ id }) => 
-  console.debug('Heartbeat:', id));
-worker.on('error', (err) => 
-  console.error('Worker error:', err));
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  await worker.stop();
-  await pool.end();
-  process.exit(0);
-});
-
-await worker.start();
+worker.start();
 */

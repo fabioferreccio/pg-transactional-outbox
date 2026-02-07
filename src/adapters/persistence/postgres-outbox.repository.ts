@@ -4,19 +4,35 @@
  * Implements persistence operations for the outbox pattern.
  */
 
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type {
   OutboxRepositoryPort,
   ClaimOptions,
 } from "../../core/ports/outbox-repository.port.js";
 import { OutboxEvent } from "../../core/domain/entities/outbox-event.js";
 import type { EventStatus } from "../../core/domain/value-objects/event-status.js";
+import { SqlExecutor, QueryResult } from "./sql-executor.js";
+import { PgSqlExecutor } from "./pg-executor.js";
 
 export class PostgresOutboxRepository implements OutboxRepositoryPort {
-  constructor(private readonly pool: Pool) {}
+  private readonly executor: SqlExecutor;
+
+  constructor(poolOrExecutor: Pool | PoolClient | SqlExecutor) {
+    if (this.isSqlExecutor(poolOrExecutor)) {
+      this.executor = poolOrExecutor;
+    } else {
+      this.executor = new PgSqlExecutor(poolOrExecutor);
+    }
+  }
+
+  private isSqlExecutor(
+    obj: Pool | PoolClient | SqlExecutor,
+  ): obj is SqlExecutor {
+    return "query" in obj && typeof (obj as SqlExecutor).query === "function";
+  }
 
   async insert(event: OutboxEvent): Promise<OutboxEvent> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<{ id: string; created_at: Date }>(
       `INSERT INTO outbox (
         tracking_id, aggregate_id, aggregate_type, event_type,
         payload, metadata, status, retry_count, max_retries
@@ -36,6 +52,9 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     );
 
     const row = result.rows[0];
+    if (!row) {
+      throw new Error("Failed to insert event");
+    }
     return OutboxEvent.reconstitute({
       ...event,
       id: BigInt(row.id),
@@ -44,7 +63,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
   }
 
   async claimBatch(options: ClaimOptions): Promise<OutboxEvent[]> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<Record<string, unknown>>(
       `UPDATE outbox
        SET status = 'PROCESSING',
            locked_until = NOW() + ($2 || ' seconds')::INTERVAL,
@@ -65,7 +84,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
   }
 
   async markCompleted(eventId: bigint, lockToken: bigint): Promise<boolean> {
-    const result = await this.pool.query(
+    const result = await this.executor.query(
       `UPDATE outbox
        SET status = 'COMPLETED', processed_at = NOW(), locked_until = NULL, lock_token = NULL
        WHERE id = $1 AND lock_token = $2`,
@@ -79,7 +98,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     lockToken: bigint,
     error: string,
   ): Promise<boolean> {
-    const result = await this.pool.query(
+    const result = await this.executor.query(
       `UPDATE outbox
        SET status = 'FAILED', 
            retry_count = retry_count + 1,
@@ -97,7 +116,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     lockToken: bigint,
     error: string,
   ): Promise<boolean> {
-    const result = await this.pool.query(
+    const result = await this.executor.query(
       `UPDATE outbox
        SET status = 'DEAD_LETTER', 
            last_error = $3,
@@ -115,7 +134,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     lockToken: bigint,
     leaseSeconds: number,
   ): Promise<boolean> {
-    const result = await this.pool.query(
+    const result = await this.executor.query(
       `UPDATE outbox
        SET locked_until = NOW() + ($3 || ' seconds')::INTERVAL
        WHERE id = $1 AND lock_token = $2 AND status = 'PROCESSING'`,
@@ -125,7 +144,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
   }
 
   async recoverStaleEvents(): Promise<number> {
-    const result = await this.pool.query(
+    const result = await this.executor.query(
       `UPDATE outbox
        SET status = 'PENDING', locked_until = NULL, lock_token = NULL
        WHERE status = 'PROCESSING' AND locked_until < NOW()`,
@@ -134,14 +153,15 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
   }
 
   async findById(eventId: bigint): Promise<OutboxEvent | null> {
-    const result = await this.pool.query(`SELECT * FROM outbox WHERE id = $1`, [
-      eventId.toString(),
-    ]);
+    const result = await this.executor.query<Record<string, unknown>>(
+      `SELECT * FROM outbox WHERE id = $1`,
+      [eventId.toString()],
+    );
     return result.rows[0] ? this.mapRowToEvent(result.rows[0]) : null;
   }
 
   async findByTrackingId(trackingId: string): Promise<OutboxEvent | null> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<Record<string, unknown>>(
       `SELECT * FROM outbox WHERE tracking_id = $1`,
       [trackingId],
     );
@@ -152,7 +172,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     status: EventStatus,
     limit: number,
   ): Promise<OutboxEvent[]> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<Record<string, unknown>>(
       `SELECT * FROM outbox WHERE status = $1 ORDER BY id DESC LIMIT $2`,
       [status, limit],
     );
@@ -190,14 +210,17 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
       query += ` ORDER BY id DESC LIMIT $1`;
     }
 
-    const result = await this.pool.query(query, params);
+    const result = await this.executor.query<Record<string, unknown>>(
+      query,
+      params,
+    );
     const events = result.rows.map((row) => this.mapRowToEvent(row));
 
     return options.after ? events.reverse() : events;
   }
 
   async getOldestPendingAgeSeconds(): Promise<number> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<{ age: number }>(
       `SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at))) as age
        FROM outbox WHERE status = 'PENDING'`,
     );
@@ -205,28 +228,28 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
   }
 
   async getPendingCount(): Promise<number> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM outbox WHERE status = 'PENDING'`,
     );
     return parseInt(result.rows[0]?.count ?? "0", 10);
   }
 
   async getDeadLetterCount(): Promise<number> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM outbox WHERE status = 'DEAD_LETTER'`,
     );
     return parseInt(result.rows[0]?.count ?? "0", 10);
   }
 
   async getCompletedCount(): Promise<number> {
-    const result = await this.pool.query(
+    const result = await this.executor.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM outbox WHERE status = 'COMPLETED'`,
     );
     return parseInt(result.rows[0]?.count ?? "0", 10);
   }
 
   async cleanup(): Promise<number> {
-    const result = await this.pool.query(
+    const result = await this.executor.query(
       `DELETE FROM outbox WHERE status IN ('COMPLETED', 'DEAD_LETTER')`,
     );
     return result.rowCount ?? 0;
@@ -245,10 +268,10 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
       retryCount: row.retry_count as number,
       maxRetries: row.max_retries as number,
       createdAt: row.created_at as Date,
-      processedAt: row.processed_at as Date | undefined,
-      lockedUntil: row.locked_until as Date | undefined,
+      processedAt: (row.processed_at as Date) || undefined,
+      lockedUntil: (row.locked_until as Date) || undefined,
       lockToken: row.lock_token ? BigInt(row.lock_token as string) : undefined,
-      lastError: row.last_error as string | undefined,
+      lastError: (row.last_error as string) || undefined,
     });
   }
 }

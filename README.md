@@ -166,6 +166,45 @@ await publishUseCase.execute({
 await pool.query('COMMIT');
 ```
 
+## 🔌 Using with ORMs (Prisma, Knex, etc.)
+
+This library is **driver-agnostic**. You can use it with **Prisma**, **Knex**, **TypeORM**, or any other tool by implementing the simple `SqlExecutor` interface.
+
+### Example: Prisma
+
+```typescript
+// 1. Create a simple adapter
+const prismaExecutor = {
+  async query(sql: string, params: any[]) {
+    const rows = await prisma.$queryRawUnsafe(sql, ...params);
+    return { rows, rowCount: rows.length };
+  }
+};
+
+// 2. Inject into Repository & Idempotency Store
+const repository = new PostgresOutboxRepository(prismaExecutor);
+const idempotencyStore = new PostgresIdempotencyStore(prismaExecutor);
+
+// 3. Use inside Prisma Transaction
+await prisma.$transaction(async (tx) => {
+  const txAdapter = { /* wrapper */ };
+  const txRepo = new PostgresOutboxRepository(txAdapter);
+  const txIdempotency = new PostgresIdempotencyStore(txAdapter);
+
+  // Check idempotency first!
+  if (await txIdempotency.isProcessed(eventId)) return;
+
+  // Process...
+  
+  // Mark processed
+  await txIdempotency.markProcessed(eventId, 'consumer-group');
+});
+```
+
+👉 **[See Full Adapter Guide](docs/ORM_ADAPTERS.md)** for Knex, TypeORM, and production-ready code.
+
+
+
 ## ⚙️ Resilience Mechanisms
 
 ### Lease / Heartbeat
@@ -243,15 +282,18 @@ async function handleOrderCreated(event: OrderCreatedEvent) {
 
 // ✅ RIGHT: Idempotent consumer
 async function handleOrderCreated(event: OrderCreatedEvent) {
-  // Check if already processed
+  // 1. Initialize Deduplication Store (supports SqlExecutor!)
+  const idempotencyStore = new PostgresIdempotencyStore(poolOrExecutor);
+
+  // 2. Check if already processed
   if (await idempotencyStore.isProcessed(event.trackingId)) {
     return;  // Skip duplicate
   }
   
-  // Process event
+  // 3. Process event
   await sendEmail(event.payload.customerId);
   
-  // Mark as processed (atomically with side effect if possible)
+  // 4. Mark as processed (atomically if possible)
   await idempotencyStore.markProcessed(event.trackingId, 'email-service');
 }
 ```
@@ -337,6 +379,10 @@ OUTBOX_BATCH_SIZE=100
 OUTBOX_LEASE_SECONDS=30
 OUTBOX_POLL_INTERVAL_MS=1000
 OUTBOX_MAX_RETRIES=5
+
+# Migration Flags (npm run db:migrate):
+PARTITION_TABLES=true     # Enable pg_partman
+ENABLE_AUDIT=true         # Enable audit triggers
 ```
 
 ## 📈 Scale Ceiling
@@ -389,6 +435,7 @@ src/
 | [Capacity Model](docs/capacity-model.md) | Scale formulas and tuning |
 | [Incident Playbook](docs/incident-playbook.md) | Symptom → Action mapping |
 | [Migration Roadmap](docs/migration-roadmap.md) | Kafka/CDC migration guide |
+| [High Scale & Audit](docs/PARTITIONING.md) | Partitioning (pg_partman) & Auditing |
 
 ### Observability
 

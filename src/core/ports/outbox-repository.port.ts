@@ -82,10 +82,10 @@ export interface OutboxRepositoryPort {
   /**
    * Find recent events with keyset pagination
    */
-  findRecent(options: { 
-    limit: number; 
-    before?: bigint; 
-    after?: bigint; 
+  findRecent(options: {
+    limit: number;
+    before?: bigint;
+    after?: bigint;
   }): Promise<OutboxEvent[]>;
 
   /**

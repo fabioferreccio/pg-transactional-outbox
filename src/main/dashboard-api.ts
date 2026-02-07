@@ -1,12 +1,12 @@
 /**
  * Dashboard API Service
- * 
+ *
  * Exposes internal state and controls via JSON endpoints.
  */
 
-import { OutboxEvent } from '../core/domain/entities/outbox-event.js';
-import { OutboxRepositoryPort } from '../core/ports/outbox-repository.port.js';
-import { EventSimulator } from './simulator.js';
+import { OutboxEvent } from "../core/domain/entities/outbox-event.js";
+import { OutboxRepositoryPort } from "../core/ports/outbox-repository.port.js";
+import { EventSimulator } from "./simulator.js";
 
 export class DashboardApi {
   constructor(private repository: OutboxRepositoryPort) {}
@@ -17,7 +17,9 @@ export class DashboardApi {
   /**
    * Get recent events overview with cursor-based pagination
    */
-  async getRecentEvents(options: { limit?: number; before?: string; after?: string } = {}): Promise<Record<string, unknown>> {
+  async getRecentEvents(
+    options: { limit?: number; before?: string; after?: string } = {},
+  ): Promise<Record<string, unknown>> {
     const limit = options.limit || 8;
     const before = options.before ? BigInt(options.before) : undefined;
     const after = options.after ? BigInt(options.after) : undefined;
@@ -25,12 +27,12 @@ export class DashboardApi {
     const events = await this.repository.findRecent({
       limit: limit + 1,
       before,
-      after
+      after,
     });
 
     const hasMore = events.length > limit;
     let items;
-    
+
     if (hasMore) {
       if (options.after) {
         // When moving newer, we fetch limit + 1 ASC and reverse.
@@ -38,7 +40,7 @@ export class DashboardApi {
         // We want the 8 closest to our cursor (the end of the ASC list, start of reversed).
         // Actually, ASC 93, 94... 100, 101. Reversed 101, 100... 94, 93.
         // Closest to 92 are 93..100 which are at the END of reversed.
-        items = events.slice(1); 
+        items = events.slice(1);
       } else {
         // When moving older, we fetch limit + 1 DESC.
         // Result is [ImmediatePrev8, ..., OldestExtra]
@@ -63,13 +65,14 @@ export class DashboardApi {
         lastError: e.lastError,
         createdAt: e.createdAt,
         processedAt: e.processedAt,
-        producerId: (e.payload as { producerId?: string })?.producerId || 'System'
+        producerId:
+          (e.payload as { producerId?: string })?.producerId || "System",
       })),
       pagination: {
         firstId: firstEvent?.id?.toString() || null,
         lastId: lastEvent?.id?.toString() || null,
-        hasMore: hasMore
-      }
+        hasMore: hasMore,
+      },
     };
   }
 
@@ -87,7 +90,7 @@ export class DashboardApi {
     const [pending, deadLetter, completed] = await Promise.all([
       this.repository.getPendingCount(),
       this.repository.getDeadLetterCount(),
-      this.repository.getCompletedCount()
+      this.repository.getCompletedCount(),
     ]);
 
     const producers = EventSimulator.getProducers();
@@ -100,7 +103,7 @@ export class DashboardApi {
       deadLetterEvents: deadLetter,
       completedEvents: completed,
       uptime: Math.floor(process.uptime()),
-      memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB'
+      memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB",
     };
   }
 }

@@ -18,6 +18,10 @@ export * from "../core/use-cases/index.js";
 export * from "../adapters/persistence/index.js";
 export * from "../adapters/messaging/index.js";
 
+// Script exports
+export * from "../scripts/run-migrations.js";
+export * from "../scripts/run-seed.js";
+
 // Telemetry exports (avoid conflict with core TraceContext)
 export {
   startSpan,

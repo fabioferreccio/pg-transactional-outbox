@@ -5,7 +5,6 @@
  * Suitable for low-to-medium throughput (< 10,000 events/sec).
  */
 
-import type { Pool } from "pg";
 import type { OutboxRepositoryPort } from "../../core/ports/outbox-repository.port.js";
 import type { EventPublisherPort } from "../../core/ports/event-publisher.port.js";
 import {
