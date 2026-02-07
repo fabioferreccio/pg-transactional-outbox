@@ -165,7 +165,7 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     after?: bigint;
   }): Promise<OutboxEvent[]> {
     let query = `SELECT * FROM outbox`;
-    const params: any[] = [options.limit];
+    const params: (string | number)[] = [options.limit];
     const where: string[] = [];
 
     if (options.after) {

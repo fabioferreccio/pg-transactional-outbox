@@ -123,5 +123,9 @@ Acesse: `http://localhost:3000`
 2. **Monitoramento de DLE**: Eventos que atingem o máximo de re-tentativas vão para `DEAD_LETTER`. Monitore esses casos para intervenção manual.
 3. **Particionamento**: Nunca use uma tabela única sem partições para produção; a performance do VACUUM irá degradar.
 
+## 💡 6. Exemplos Reais
+
+- [**Integração CERC (AP001)**](EXAMPLE_CERC.md): Fluxo completo envolvendo geração de arquivos, upload para S3 e resposta assíncrona.
+
 ---
 Para mais detalhes arquiteturais, veja o [README.md](../../README.md).

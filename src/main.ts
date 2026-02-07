@@ -33,17 +33,18 @@ async function bootstrap() {
   
   // 2. Simple Mock Publisher for testing
   const mockPublisher = {
-    publish: async (event: any) => {
+    publish: async (event: import('./core/domain/entities/outbox-event.js').OutboxEvent) => {
       // Simulate network latency
       await new Promise(resolve => setTimeout(resolve, Math.random() * 800));
 
       // FAILURE INJECTION LOGIC
-      const sim = event.payload?.simulation;
+      const payload = event.payload as { simulation?: Record<string, unknown> };
+      const sim = payload.simulation;
       if (sim?.fail_always) {
         throw new Error(`[Simulator] Fatal failure for event ${event.id}`);
       }
       
-      if (sim?.fail_times && (event.retryCount || 0) < sim.fail_times) {
+      if (sim?.fail_times && (event.retryCount || 0) < (sim.fail_times as number)) {
         throw new Error(`[Simulator] Temporary failure (retry ${event.retryCount}) for event ${event.id}`);
       }
 
@@ -92,7 +93,7 @@ async function bootstrap() {
       const type = url.searchParams.get('type') || 'order';
       const mode = url.searchParams.get('mode') || 'success';
       
-      const simMeta: Record<string, any> = {};
+      const simMeta: Record<string, unknown> = {};
       if (mode === 'retry') simMeta.fail_times = 2;
       if (mode === 'fail') simMeta.fail_always = true;
 
@@ -106,7 +107,7 @@ async function bootstrap() {
       res.end(JSON.stringify({ 
         success: true, 
         eventId: event.trackingId, 
-        producerId: (event.payload as any).producerId 
+        producerId: (event.payload as { producerId?: string })?.producerId || 'Unknown'
       }));
       return;
     }
@@ -165,11 +166,11 @@ async function bootstrap() {
     }
 
     // Static Files (Dashboard)
-    let filePath = path.join(__dirname, '../dashboard', url.pathname === '/' ? 'index.html' : url.pathname);
+    const filePath = path.join(__dirname, '../dashboard', url.pathname === '/' ? 'index.html' : url.pathname);
     
     if (fs.existsSync(filePath)) {
       const ext = path.extname(filePath);
-      const contentTypes: any = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+      const contentTypes: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
       res.writeHead(200, { 'Content-Type': contentTypes[ext] || 'text/plain' });
       fs.createReadStream(filePath).pipe(res);
       return;

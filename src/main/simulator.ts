@@ -43,7 +43,7 @@ export class EventSimulator {
   /**
    * Generates a successful Order flow
    */
-  static generateOrderCreated(meta: Record<string, any> = {}): SimulatedEvent {
+  static generateOrderCreated(meta: Record<string, unknown> = {}): SimulatedEvent {
     const orderId = crypto.randomUUID();
     return {
       trackingId: crypto.randomUUID(),
@@ -68,7 +68,7 @@ export class EventSimulator {
   /**
    * Generates a payment failed event
    */
-  static generatePaymentFailed(meta: Record<string, any> = {}): SimulatedEvent {
+  static generatePaymentFailed(meta: Record<string, unknown> = {}): SimulatedEvent {
     return {
       trackingId: crypto.randomUUID(),
       aggregateType: 'Payment',
@@ -87,7 +87,7 @@ export class EventSimulator {
   /**
    * Generates a user registration event
    */
-  static generateUserRegistered(meta: Record<string, any> = {}): SimulatedEvent {
+  static generateUserRegistered(meta: Record<string, unknown> = {}): SimulatedEvent {
     const userId = crypto.randomUUID();
     return {
       trackingId: crypto.randomUUID(),

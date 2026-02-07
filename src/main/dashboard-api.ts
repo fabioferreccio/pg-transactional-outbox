@@ -17,7 +17,7 @@ export class DashboardApi {
   /**
    * Get recent events overview with cursor-based pagination
    */
-  async getRecentEvents(options: { limit?: number; before?: string; after?: string } = {}): Promise<any> {
+  async getRecentEvents(options: { limit?: number; before?: string; after?: string } = {}): Promise<Record<string, unknown>> {
     const limit = options.limit || 8;
     const before = options.before ? BigInt(options.before) : undefined;
     const after = options.after ? BigInt(options.after) : undefined;
@@ -63,7 +63,7 @@ export class DashboardApi {
         lastError: e.lastError,
         createdAt: e.createdAt,
         processedAt: e.processedAt,
-        producerId: (e.payload as any)?.producerId || 'System'
+        producerId: (e.payload as { producerId?: string })?.producerId || 'System'
       })),
       pagination: {
         firstId: firstEvent?.id?.toString() || null,
@@ -83,7 +83,7 @@ export class DashboardApi {
   /**
    * Get system health and counts
    */
-  async getStats(): Promise<any> {
+  async getStats(): Promise<Record<string, unknown>> {
     const [pending, deadLetter, completed] = await Promise.all([
       this.repository.getPendingCount(),
       this.repository.getDeadLetterCount(),
