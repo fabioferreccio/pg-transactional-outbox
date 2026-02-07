@@ -100,8 +100,12 @@ npm install pg-transactional-outbox
 
 ```bash
 npm install git+ssh://git@github.com:fabioferreccio/pg-transactional-outbox.git
+
 # or
-npm install git+https://github.com/fabioferreccio/pg-transactional-outbox.git
+npm install github:fabioferreccio/pg-transactional-outbox --force
+
+# Or switch to a specific tag
+npm install github:fabioferreccio/pg-transactional-outbox#v0.6.6
 ```
 
 ## 🚀 Release Workflow
@@ -156,32 +160,186 @@ CREATE TABLE outbox_2024_02 PARTITION OF outbox
   FOR VALUES FROM ('2024-02-01') TO ('2024-03-01');
 ```
 
-### 3. Publish Events (In Same Transaction)
+---
+
+## 📤 Producer (Publishing Events)
+
+The **Producer** is your application code that **inserts events into the outbox table** within the same transaction that modifies business state.
 
 ```typescript
 import { Pool } from 'pg';
 import { PublishEventUseCase, PostgresOutboxRepository } from 'pg-transactional-outbox';
 
+// 1. Configure database connection
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// Inside your business transaction
-await pool.query('BEGIN');
+// 2. Create repository and use case instances
+const repository = new PostgresOutboxRepository(pool);
+const publishUseCase = new PublishEventUseCase(repository);
 
-// 1. Create order (business state)
-await pool.query('INSERT INTO orders (id, customer_id, total) VALUES ($1, $2, $3)', 
-  [orderId, customerId, total]);
-
-// 2. Publish event (SAME transaction!)
-const publishUseCase = new PublishEventUseCase(new PostgresOutboxRepository(pool));
-await publishUseCase.execute({
-  aggregateId: orderId,
-  aggregateType: 'Order',
-  eventType: 'OrderCreated',
-  payload: { orderId, customerId, total },
-});
-
-await pool.query('COMMIT');
+// 3. Publish event (INSIDE the business transaction!)
+async function createOrder(customerId: string, total: number) {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // a) Create order (business state)
+    const orderId = crypto.randomUUID();
+    await client.query(
+      'INSERT INTO orders (id, customer_id, total) VALUES ($1, $2, $3)',
+      [orderId, customerId, total]
+    );
+    
+    // b) Publish event in the same transaction!
+    const txRepository = new PostgresOutboxRepository(client);
+    const txPublishUseCase = new PublishEventUseCase(txRepository);
+    
+    await txPublishUseCase.execute({
+      aggregateId: orderId,
+      aggregateType: 'Order',
+      eventType: 'OrderCreated',
+      payload: { orderId, customerId, total, createdAt: new Date() },
+    });
+    
+    await client.query('COMMIT');
+    return orderId;
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 ```
+
+> [!IMPORTANT]
+> The event **MUST** be inserted in the **same transaction** as the business state. This guarantees atomicity: either both are persisted, or neither.
+
+---
+
+## ⚙️ Worker (Event Relay)
+
+The **Worker** is a background process that **relays (forwards)** events from the outbox to external systems (Kafka, RabbitMQ, HTTP webhooks, etc.).
+
+### What the Worker does:
+
+1. **Poll**: Fetches `PENDING` events from the outbox table
+2. **Claim**: Acquires a "lease" (temporary lock) on the events
+3. **Process**: Sends each event to the external system
+4. **Complete/Fail**: Marks as `COMPLETED` or `FAILED`
+5. **Repeat**: Goes back to step 1
+
+```typescript
+import { Pool } from 'pg';
+import { 
+  ProcessOutboxUseCase, 
+  PostgresOutboxRepository 
+} from 'pg-transactional-outbox';
+
+// 1. Configure connection and repository
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const repository = new PostgresOutboxRepository(pool);
+
+// 2. Create the processing use case
+const processOutbox = new ProcessOutboxUseCase(repository);
+
+// 3. Implement the handler that sends events to the external system
+async function publishToKafka(event: OutboxEvent): Promise<void> {
+  // Example: send to Kafka
+  await kafkaProducer.send({
+    topic: `${event.aggregateType}.${event.eventType}`,
+    messages: [{ 
+      key: event.aggregateId, 
+      value: JSON.stringify(event.payload) 
+    }],
+  });
+}
+
+// 4. Worker loop
+async function startWorker() {
+  console.log('🚀 Worker started');
+  
+  while (true) {
+    try {
+      // Fetch and process batch of events
+      const result = await processOutbox.execute({
+        batchSize: 100,
+        leaseSeconds: 30,
+        handler: publishToKafka,  // your send function
+      });
+      
+      console.log(`✅ Processed: ${result.processed}, ❌ Failed: ${result.failed}`);
+      
+    } catch (error) {
+      console.error('Worker error:', error);
+    }
+    
+    // Interval between polls
+    await sleep(1000);
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Start
+startWorker();
+```
+
+> [!TIP]
+> The Worker does **NOT** process business logic - it only **transmits** events to external systems. Business logic belongs in the **Consumer**.
+
+---
+
+## 📥 Consumer (Processing Events)
+
+The **Consumer** is the code that **receives and processes** events from the external system (Kafka, RabbitMQ, etc.). This is where the receiver's business logic happens.
+
+```typescript
+import { Pool } from 'pg';
+import { PostgresIdempotencyStore } from 'pg-transactional-outbox';
+
+// 1. Configure idempotency store
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const idempotencyStore = new PostgresIdempotencyStore(pool);
+
+// 2. Consumer handler (called by Kafka/RabbitMQ/etc)
+async function handleOrderCreated(event: OrderCreatedEvent) {
+  const { trackingId, payload } = event;
+  
+  // a) ALWAYS check if already processed (idempotency!)
+  if (await idempotencyStore.isProcessed(trackingId)) {
+    console.log(`⏭️ Event ${trackingId} already processed, skipping`);
+    return;
+  }
+  
+  // b) Process business logic
+  await sendConfirmationEmail(payload.customerId, payload.orderId);
+  await updateInventory(payload.items);
+  await notifyWarehouse(payload.orderId);
+  
+  // c) Mark as processed (prevents future duplicates)
+  await idempotencyStore.markProcessed(trackingId, 'order-consumer');
+  
+  console.log(`✅ Event ${trackingId} processed successfully`);
+}
+
+// 3. Connect to Kafka/RabbitMQ
+kafkaConsumer.subscribe({ topic: 'Order.OrderCreated' });
+
+kafkaConsumer.run({
+  eachMessage: async ({ message }) => {
+    const event = JSON.parse(message.value.toString());
+    await handleOrderCreated(event);
+  },
+});
+```
+
+> [!CAUTION]
+> **Idempotency is MANDATORY!** This is an at-least-once delivery system. Events may be delivered more than once (network failures, retries, etc). Your consumer MUST check for duplicates.
 
 ## 🔌 Using with ORMs (Prisma, Knex, etc.)
 
