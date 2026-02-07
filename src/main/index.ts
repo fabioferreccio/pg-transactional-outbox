@@ -10,6 +10,7 @@ export * from "../core/domain/entities/index.js";
 export * from "../core/domain/errors/index.js";
 export * from "../core/domain/events/index.js";
 export * from "../core/domain/value-objects/index.js";
+export * from "../core/domain/services/index.js";
 export * from "../core/domain/upcaster.js";
 export * from "../core/ports/index.js";
 export * from "../core/use-cases/index.js";
@@ -17,6 +18,7 @@ export * from "../core/use-cases/index.js";
 // Adapter exports
 export * from "../adapters/persistence/index.js";
 export * from "../adapters/messaging/index.js";
+export * from "../adapters/cdc/index.js";
 
 // Script exports
 export * from "../scripts/run-migrations.js";

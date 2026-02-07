@@ -45,7 +45,7 @@
     "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
     "db:seed": "node --loader ts-node/esm scripts/seed.ts",
     "docker:up": "docker-compose up -d",
-    "docker:down": "docker-compose down",
+    "docker:down": "docker-compose down -v",
     "release:patch": "npm version patch && git push && git push --tags",
     "release:minor": "npm version minor && git push && git push --tags",
     "release:major": "npm version major && git push && git push --tags"

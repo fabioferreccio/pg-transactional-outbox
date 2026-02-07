@@ -6,6 +6,7 @@
 # - autovacuum tuned for high churn tables
 #
 # Usage:
+#   cp .env.example .env   # Configure your environment
 #   docker-compose up -d
 #   docker-compose logs -f postgres
 
@@ -18,12 +19,12 @@ services:
     restart: unless-stopped
 
     environment:
-      POSTGRES_USER: outbox
-      POSTGRES_PASSWORD: outbox_secret
-      POSTGRES_DB: outbox
+      POSTGRES_USER: ${POSTGRES_USER:-outbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-outbox_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-outbox}
 
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -84,6 +85,8 @@ services:
       - "-c"
       - "wal_level=logical"
       - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
       - "max_replication_slots=10"
       - "-c"
       - "max_wal_senders=10"
@@ -135,7 +138,7 @@ services:
     container_name: outbox-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./docker/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./docker/monitoring/prometheus-alerting-rules.yaml:/etc/prometheus/alerting-rules.yaml:ro
@@ -152,9 +155,9 @@ services:
     container_name: outbox-postgres-exporter
     restart: unless-stopped
     ports:
-      - "9187:9187"
+      - "${POSTGRES_EXPORTER_PORT:-9187}:9187"
     environment:
-      DATA_SOURCE_NAME: "postgresql://outbox:outbox_secret@postgres:5432/outbox?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-outbox}:${POSTGRES_PASSWORD:-outbox_secret}@postgres:5432/${POSTGRES_DB:-outbox}?sslmode=disable"
     volumes:
       - ./docker/monitoring/postgres-exporter-queries.yaml:/etc/postgres_exporter/queries.yaml:ro
     command:
@@ -167,7 +170,7 @@ services:
     container_name: outbox-grafana
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin

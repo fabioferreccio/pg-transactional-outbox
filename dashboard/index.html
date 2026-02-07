@@ -28,27 +28,48 @@
             padding: 0;
         }
 
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow-y: auto;
+        }
+
         body {
             background: var(--bg);
             color: var(--text);
             font-family: 'Inter', sans-serif;
             line-height: 1.6;
-            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 1.5rem 2rem;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
         }
 
         header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 2rem;
+            margin-bottom: 1.5rem;
             padding-bottom: 1rem;
             border-bottom: 1px solid var(--border);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 340px;
+            gap: 1.5rem;
+            flex: 1;
+            min-height: 0;
         }
 
         .logo {
@@ -76,24 +97,25 @@
             color: var(--text);
         }
 
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 300px;
-            gap: 2rem;
-        }
-
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 12px;
             padding: 1.5rem;
             box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card.log-card {
+            flex: 1;
+            min-height: 400px;
         }
 
         .card-title {
             font-size: 1rem;
             font-weight: 600;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
             display: flex;
             align-items: center;
             gap: 0.5rem;
@@ -104,7 +126,7 @@
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 1rem;
-            margin-bottom: 2rem;
+            margin-bottom: 1.5rem;
         }
 
         .stat-card {
@@ -115,7 +137,7 @@
             font-size: 2rem;
             font-weight: 700;
             display: block;
-            margin: 0.5rem 0;
+            margin: 0.25rem 0;
         }
 
         .stat-card .label {
@@ -139,10 +161,11 @@
 
         /* Event Log */
         .log-container {
-            height: 600px;
+            flex: 1;
             overflow-y: auto;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.85rem;
+            margin-top: 0.5rem;
         }
 
         .event-row {
@@ -405,6 +428,37 @@
                             style="border-color: var(--error)">💀 Fatal Failure (DLE)</button>
                     </div>
 
+                    <div style="margin-bottom: 0;">
+                        <span class="label" style="font-size: 0.7rem; display: block; margin-bottom: 0.5rem;">Chaos &
+                            Load</span>
+                        <button class="btn" onclick="toggleSlow()" id="btn-toggle-slow">
+                            <i id="icon-slow">🐌</i> Slow Consumer: <b id="status-slow">OFF</b>
+                        </button>
+                        <button class="btn" onclick="toggleTraffic()" id="btn-toggle-traffic">
+                            <i id="icon-traffic">🚗</i> Background Traffic: <b id="status-traffic">OFF</b>
+                        </button>
+                        <button class="btn" onclick="toggleCdc()" id="btn-toggle-cdc">
+                            <i id="icon-cdc">🧬</i> Replication Slot: <b id="status-cdc">OFF</b>
+                        </button>
+                    </div>
+
+                    <div style="margin-top: 1.5rem;">
+                        <span class="label" style="font-size: 0.7rem; display: block; margin-bottom: 0.5rem;">Heavy
+                            Stress Tests ⚔️</span>
+                        <button class="btn" onclick="runStress('bloat')" id="btn-stress-bloat">
+                            💣 Trigger DB Bloat
+                        </button>
+                        <button class="btn" onclick="runStress('burst')" id="btn-stress-burst">
+                            🎢 High-Burst (1k events)
+                        </button>
+                        <button class="btn" onclick="runStress('sequence-stress')" id="btn-stress-seq">
+                            📉 Stress Sequence Gauge
+                        </button>
+                        <button class="btn" onclick="runStress('partitions')" id="btn-stress-part">
+                            🧩 Create Demo Partitions
+                        </button>
+                    </div>
+
                     <p style="font-size: 0.75rem; color: var(--text-dim); margin-top: 1rem;">
                         Select a mode to inject specific behaviors into the worker processing logic.
                     </p>
@@ -475,15 +529,92 @@
                 // 1.5 Update Dynamic Producer Nodes
                 renderProducerNodes(statsData.producerList || []);
 
+                // 1.8 Update Simulation State
+                const simStateRes = await fetch('/api/simulation-state');
+                const simState = await simStateRes.json();
+
+                document.getElementById('status-slow').innerText = simState.isSlowConsumer ? 'ACTIVE' : 'OFF';
+                document.getElementById('status-slow').style.color = simState.isSlowConsumer ? 'var(--warning)' : 'inherit';
+                document.getElementById('btn-toggle-slow').style.borderColor = simState.isSlowConsumer ? 'var(--warning)' : 'var(--border)';
+
+                document.getElementById('status-traffic').innerText = simState.isBackgroundBusy ? 'ON' : 'OFF';
+                document.getElementById('status-traffic').style.color = simState.isBackgroundBusy ? 'var(--success)' : 'inherit';
+                document.getElementById('btn-toggle-traffic').style.borderColor = simState.isBackgroundBusy ? 'var(--success)' : 'var(--border)';
+
+                document.getElementById('status-cdc').innerText = simState.isCdcActive ? 'ACTIVE' : 'OFF';
+                document.getElementById('status-cdc').style.color = simState.isCdcActive ? 'var(--primary)' : 'inherit';
+                document.getElementById('btn-toggle-cdc').style.borderColor = simState.isCdcActive ? 'var(--primary)' : 'var(--border)';
+
                 // 2. Fetch Events (only auto-refresh if at start of log)
                 if (paginationState.atStart && paginationState.isPolling) {
                     await fetchEvents();
                 } else {
                     updatePaginationUI();
                 }
-                updatePaginationUI();
             } catch (err) {
                 console.error('Dashboard heartbeat failed:', err);
+            }
+        }
+
+        async function toggleSlow() {
+            await fetch('/api/toggle-slow', { method: 'POST' });
+            updateDashboard();
+        }
+
+        async function toggleTraffic() {
+            await fetch('/api/toggle-traffic', { method: 'POST' });
+            updateDashboard();
+        }
+
+        async function toggleCdc() {
+            await fetch('/api/toggle-cdc', { method: 'POST' });
+            updateDashboard();
+        }
+
+        async function runStress(mode) {
+            const btnMap = {
+                'bloat': 'btn-stress-bloat',
+                'burst': 'btn-stress-burst',
+                'sequence-stress': 'btn-stress-seq',
+                'partitions': 'btn-stress-part'
+            };
+            const btnId = btnMap[mode];
+            const btn = document.getElementById(btnId);
+            const originalText = btn.innerText;
+
+            btn.innerText = '⚡ EXECUTING...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`/api/simulate-${mode}`, { method: 'POST' });
+                if (res.ok) {
+                    if (mode === 'bloat') {
+                        btn.innerText = '🧨 LIVE BLOAT [20s]';
+                        setTimeout(() => {
+                            btn.innerText = '✅ DEAD TUPLES READY';
+                            setTimeout(() => {
+                                btn.innerText = originalText;
+                                btn.disabled = false;
+                            }, 5000);
+                        }, 20000);
+                        return;
+                    }
+                    btn.innerText = '✅ DONE!';
+                } else {
+                    btn.innerText = '❌ FAILED';
+                }
+            } catch (err) {
+                console.error('Stress test failed:', err);
+                btn.innerText = '❌ ERROR';
+            } finally {
+                // If it's NOT bloat OR if bloat reached the catch/else (didn't return in success)
+                // we reset the button state after a period.
+                if (mode !== 'bloat' || btn.innerText.includes('❌')) {
+                    setTimeout(() => {
+                        btn.innerText = originalText;
+                        btn.disabled = false;
+                    }, 3000);
+                }
             }
         }
 

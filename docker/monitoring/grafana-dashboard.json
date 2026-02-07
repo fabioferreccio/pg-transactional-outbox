@@ -645,6 +645,61 @@
           "legendFormat": "{{ event_type }}"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 },
+      "id": 105,
+      "panels": [],
+      "title": "🔍 Query Performance Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 200 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "avg_time_ms" },
+            "properties": [
+              { "id": "unit", "value": "ms" }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 42 },
+      "id": 50,
+      "options": {
+        "footer": { "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [ { "displayName": "avg_time_ms", "desc": true } ]
+      },
+      "title": "Top Slowest Queries (pg_stat_statements)",
+      "type": "table",
+      "targets": [
+        {
+          "expr": "pg_stat_slow_queries_avg_time_ms",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{ query }}"
+        }
+      ]
     }
   ],
   "refresh": "30s",

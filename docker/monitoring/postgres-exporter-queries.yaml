@@ -158,9 +158,11 @@ pg_outbox_dead_letter_total:
 pg_outbox_table_size:
   query: |
     SELECT
-      pg_relation_size('outbox') AS table_bytes,
-      pg_indexes_size('outbox') AS indexes_bytes,
-      pg_total_relation_size('outbox') AS total_bytes
+      SUM(pg_relation_size(inhrelid)) AS table_bytes,
+      SUM(pg_indexes_size(inhrelid)) AS indexes_bytes,
+      SUM(pg_total_relation_size(inhrelid)) AS total_bytes
+    FROM pg_inherits
+    WHERE inhparent = 'outbox'::regclass
   metrics:
     - table_bytes:
         usage: "GAUGE"
@@ -175,16 +177,17 @@ pg_outbox_table_size:
 pg_outbox_bloat:
   query: |
     SELECT
-      n_live_tup AS live_tuples,
-      n_dead_tup AS dead_tuples,
-      CASE WHEN n_live_tup + n_dead_tup > 0 
-        THEN ROUND(100.0 * n_dead_tup / (n_live_tup + n_dead_tup), 2)
+      SUM(n_live_tup) AS live_tuples,
+      SUM(n_dead_tup) AS dead_tuples,
+      CASE WHEN SUM(n_live_tup) + SUM(n_dead_tup) > 0 
+        THEN ROUND(100.0 * SUM(n_dead_tup) / (SUM(n_live_tup) + SUM(n_dead_tup)), 2)
         ELSE 0 
       END AS dead_tuple_percent,
-      EXTRACT(EPOCH FROM (NOW() - last_autovacuum)) AS seconds_since_autovacuum,
-      autovacuum_count
+      EXTRACT(EPOCH FROM (NOW() - MAX(last_autovacuum))) AS seconds_since_autovacuum,
+      SUM(autovacuum_count) AS autovacuum_count
     FROM pg_stat_user_tables
-    WHERE relname = 'outbox'
+    WHERE relid IN (SELECT inhrelid FROM pg_inherits WHERE inhparent = 'outbox'::regclass)
+       OR relname = 'outbox'
   metrics:
     - live_tuples:
         usage: "GAUGE"
@@ -237,12 +240,12 @@ pg_outbox_partitions:
 pg_outbox_replication_lag:
   query: |
     SELECT
-      slot_name,
-      active::int AS is_active,
-      COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn), 0) AS lag_bytes,
-      COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn), 0) AS pending_bytes
+      'outbox_slot' AS slot_name,
+      COUNT(*)::int AS is_active,
+      COALESCE(MAX(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)), 0) AS lag_bytes,
+      COALESCE(MAX(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)), 0) AS pending_bytes
     FROM pg_replication_slots
-    WHERE slot_type = 'logical'
+    WHERE slot_name = 'outbox_slot'
   metrics:
     - slot_name:
         usage: "LABEL"
@@ -299,3 +302,36 @@ pg_outbox_workers:
     - waiting_workers:
         usage: "GAUGE"
         description: "Number of workers waiting for locks"
+
+# ============================================
+# QUERY PERFORMANCE (pg_stat_statements)
+# ============================================
+
+pg_stat_slow_queries:
+  query: |
+    SELECT 
+      query,
+      calls,
+      total_exec_time / 1000 as total_time_seconds,
+      rows,
+      (total_exec_time / calls) as avg_time_ms
+    FROM pg_stat_statements
+    WHERE query NOT LIKE '%pg_stat%'
+    ORDER BY total_exec_time DESC
+    LIMIT 10
+  metrics:
+    - query:
+        usage: "LABEL"
+        description: "The SQL query text"
+    - calls:
+        usage: "COUNTER"
+        description: "Number of times the query was executed"
+    - total_time_seconds:
+        usage: "COUNTER"
+        description: "Total time spent in this query"
+    - rows:
+        usage: "COUNTER"
+        description: "Total rows returned/affected"
+    - avg_time_ms:
+        usage: "GAUGE"
+        description: "Average execution time in milliseconds"
