@@ -8,6 +8,7 @@ import type { Pool, PoolClient } from "pg";
 import type {
   OutboxRepositoryPort,
   ClaimOptions,
+  DeadLetterStats,
 } from "../../core/ports/outbox-repository.port.js";
 import { OutboxEvent } from "../../core/domain/entities/outbox-event.js";
 import type { EventStatus } from "../../core/domain/value-objects/event-status.js";
@@ -255,6 +256,69 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     return result.rowCount ?? 0;
   }
 
+  // ========================================
+  // Dead Letter Management (v0.4)
+  // ========================================
+
+  async redriveByEventType(eventType: string): Promise<number> {
+    const result = await this.executor.query(
+      `UPDATE outbox
+       SET status = 'PENDING',
+           retry_count = 0,
+           last_error = NULL,
+           locked_until = NULL,
+           lock_token = NULL
+       WHERE status = 'DEAD_LETTER'
+         AND event_type = $1`,
+      [eventType],
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async redriveById(eventId: bigint): Promise<boolean> {
+    const result = await this.executor.query(
+      `UPDATE outbox
+       SET status = 'PENDING',
+           retry_count = 0,
+           last_error = NULL,
+           locked_until = NULL,
+           lock_token = NULL
+       WHERE id = $1
+         AND status = 'DEAD_LETTER'`,
+      [eventId.toString()],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getDeadLetterStats(): Promise<DeadLetterStats[]> {
+    const result = await this.executor.query<{
+      event_type: string;
+      count: string;
+      oldest_age: number;
+      newest_age: number;
+      error_samples: string[];
+    }>(
+      `SELECT 
+         event_type,
+         COUNT(*) as count,
+         EXTRACT(EPOCH FROM (NOW() - MIN(created_at))) as oldest_age,
+         EXTRACT(EPOCH FROM (NOW() - MAX(created_at))) as newest_age,
+         array_agg(DISTINCT LEFT(last_error, 100)) FILTER (WHERE last_error IS NOT NULL) as error_samples
+       FROM outbox
+       WHERE status = 'DEAD_LETTER'
+       GROUP BY event_type
+       ORDER BY count DESC`,
+    );
+
+    return result.rows.map((row) => ({
+      eventType: row.event_type,
+      count: parseInt(row.count, 10),
+      oldestAge: row.oldest_age ?? 0,
+      newestAge: row.newest_age ?? 0,
+      errorSamples: row.error_samples ?? [],
+    }));
+  }
+
   private mapRowToEvent(row: Record<string, unknown>): OutboxEvent {
     return OutboxEvent.reconstitute({
       id: BigInt(row.id as string),
@@ -275,3 +339,4 @@ export class PostgresOutboxRepository implements OutboxRepositoryPort {
     });
   }
 }
+

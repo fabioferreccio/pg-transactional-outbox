@@ -71,6 +71,23 @@ This framework implements the **Transactional Outbox Pattern** with:
                     └─────────────────┘
 ```
 
+## ⚠️ Ordering Guarantees
+
+> [!WARNING]
+> This library does **NOT** guarantee global event ordering.
+
+**Event order is NOT preserved when:**
+- Multiple workers are running (parallelism > 1)
+- Events fail and are retried (retry reorders the queue)
+- Network partitions cause lease expirations
+
+**If strict ordering is required:**
+1. Use single worker mode (`concurrency: 1`)
+2. Implement consumer-side ordering (e.g., sequence numbers per aggregate)
+3. Consider a partition-aware design (one worker per aggregate)
+
+The library logs a warning when `concurrency > 1` to remind operators of this behavior.
+
 ## 📦 Installation
 
 ### Via npm (Recommended)

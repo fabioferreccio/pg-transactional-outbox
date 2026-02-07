@@ -24,6 +24,7 @@ export interface OutboxEventProps {
   lockedUntil?: Date;
   lockToken?: bigint;
   lastError?: string;
+  owner?: string;
 }
 
 export interface EventMetadata {
@@ -50,6 +51,7 @@ export class OutboxEvent {
   readonly lockedUntil?: Date;
   readonly lockToken?: bigint;
   readonly lastError?: string;
+  readonly owner?: string;
 
   private constructor(props: OutboxEventProps) {
     this.id = props.id;
@@ -67,6 +69,7 @@ export class OutboxEvent {
     this.lockedUntil = props.lockedUntil;
     this.lockToken = props.lockToken;
     this.lastError = props.lastError;
+    this.owner = props.owner;
   }
 
   static create(

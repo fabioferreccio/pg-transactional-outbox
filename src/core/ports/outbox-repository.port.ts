@@ -112,4 +112,38 @@ export interface OutboxRepositoryPort {
    * Cleanup processed events
    */
   cleanup(): Promise<number>;
+
+  // ========================================
+  // Dead Letter Management (v0.4)
+  // ========================================
+
+  /**
+   * Redrive dead letter events by event type
+   * Moves events from DEAD_LETTER back to PENDING
+   * @returns Number of events redriven
+   */
+  redriveByEventType(eventType: string): Promise<number>;
+
+  /**
+   * Redrive a specific dead letter event by ID
+   * @returns true if event was redriven, false if not found or not in DEAD_LETTER
+   */
+  redriveById(eventId: bigint): Promise<boolean>;
+
+  /**
+   * Get dead letter statistics grouped by event type
+   */
+  getDeadLetterStats(): Promise<DeadLetterStats[]>;
 }
+
+/**
+ * Dead letter statistics per event type
+ */
+export interface DeadLetterStats {
+  eventType: string;
+  count: number;
+  oldestAge: number; // seconds
+  newestAge: number; // seconds
+  errorSamples: string[];
+}
+
