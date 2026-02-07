@@ -40,7 +40,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
-    "prepublishOnly": "npm run clean && npm run build && npm test",
+    "prepare": "npm run clean && npm run build",
+    "prepublishOnly": "npm test",
     "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
     "db:seed": "node --loader ts-node/esm scripts/seed.ts",
     "docker:up": "docker-compose up -d",
@@ -61,6 +62,10 @@
     "idempotency",
     "event-sourcing"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fabioferreccio/pg-transactional-outbox.git"
+  },
   "author": "",
   "license": "MIT",
   "engines": {
