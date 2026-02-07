@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NotifyRelay } from './notify-relay';
-import { NotificationListener } from './notification-listener';
-import { OutboxRepositoryPort } from '../../core/ports/outbox-repository.port';
-import { EventPublisherPort } from '../../core/ports/event-publisher.port';
+import { NotifyRelay } from '../../src/adapters/messaging/notify-relay';
+import { NotificationListener } from '../../src/adapters/messaging/notification-listener';
+import { OutboxRepositoryPort } from '../../src/core/ports/outbox-repository.port';
+import { EventPublisherPort } from '../../src/core/ports/event-publisher.port';
 
 describe('NotifyRelay', () => {
   let relay: NotifyRelay;

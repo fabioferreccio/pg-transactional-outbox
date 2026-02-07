@@ -82,7 +82,7 @@ export class PostgresIdempotencyStore implements IdempotencyStorePort {
     }
 
     // Map snake_case to camelCase
-    const row = rows[0];
+    const row = rows[0]!;
     return {
       trackingId: row.tracking_id,
       processedAt: row.processed_at,

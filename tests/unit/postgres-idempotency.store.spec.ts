@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PostgresIdempotencyStore } from './postgres-idempotency.store';
-import { SqlExecutor } from './sql-executor';
+import { PostgresIdempotencyStore } from '../../src/adapters/persistence/postgres-idempotency.store';
+import { SqlExecutor } from '../../src/adapters/persistence/sql-executor';
 
 describe('PostgresIdempotencyStore', () => {
   let store: PostgresIdempotencyStore;

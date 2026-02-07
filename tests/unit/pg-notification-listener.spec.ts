@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PgNotificationListener } from './pg-notification-listener';
+import { PgNotificationListener } from '../../src/adapters/messaging/pg-notification-listener';
 import { Pool, PoolClient } from 'pg';
 
 vi.mock('pg', () => {
