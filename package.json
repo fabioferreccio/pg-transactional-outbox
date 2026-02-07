@@ -19,6 +19,13 @@
       "types": "./dist/adapters/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node --loader ts-node/esm src/main.ts",
     "dev": "ts-node-esm src/main.ts",
@@ -37,7 +44,10 @@
     "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
     "db:seed": "node --loader ts-node/esm scripts/seed.ts",
     "docker:up": "docker-compose up -d",
-    "docker:down": "docker-compose down"
+    "docker:down": "docker-compose down",
+    "release:patch": "npm version patch && git push && git push --tags",
+    "release:minor": "npm version minor && git push && git push --tags",
+    "release:major": "npm version major && git push && git push --tags"
   },
   "keywords": [
     "transactional-outbox",

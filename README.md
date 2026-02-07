@@ -7,7 +7,7 @@
 > **Production-grade Transactional Outbox Framework** for guaranteed event delivery with PostgreSQL.
 
 ### 📚 Documentação / Documentation
-- [📖 **Manual de Uso (Português)**](src/main/USAGE_GUIDE.md)
+- [📖 **Manual de Uso (Português)**](docs/USAGE_GUIDE.md)
 - [📖 **Architecture Reference (English)**](#🏗️-architecture)
 
 ## 🎯 Why Transactional Outbox?
@@ -73,8 +73,33 @@ This framework implements the **Transactional Outbox Pattern** with:
 
 ## 📦 Installation
 
+### Via npm (Recommended)
+
 ```bash
 npm install pg-transactional-outbox
+```
+
+### Via Git (Private/Forked)
+
+```bash
+npm install git+ssh://git@github.com:fabioferreccio/pg-transactional-outbox.git
+# or
+npm install git+https://github.com/fabioferreccio/pg-transactional-outbox.git
+```
+
+## 🚀 Release Workflow
+
+To publish a new version (creates git tag & updates package.json):
+
+```bash
+# 1. Patch (0.0.X) - Bug fixes
+npm run release:patch
+
+# 2. Minor (0.X.0) - New features (backward compatible)
+npm run release:minor
+
+# 3. Major (X.0.0) - Breaking changes
+npm run release:major
 ```
 
 ## 🚀 Quick Start
@@ -360,18 +385,18 @@ src/
 
 | Document | Purpose |
 |----------|---------|
-| [DLE Runbook](/.agent/skills/transactional-outbox-architect/resources/dle-runbook.md) | Dead Letter handling procedures |
-| [Capacity Model](/.agent/skills/transactional-outbox-architect/resources/capacity-model.md) | Scale formulas and tuning |
-| [Incident Playbook](/.agent/skills/transactional-outbox-architect/resources/incident-playbook.md) | Symptom → Action mapping |
-| [Migration Roadmap](/.agent/skills/transactional-outbox-architect/resources/migration-roadmap.md) | Kafka/CDC migration guide |
+| [DLE Runbook](docs/dle-runbook.md) | Dead Letter handling procedures |
+| [Capacity Model](docs/capacity-model.md) | Scale formulas and tuning |
+| [Incident Playbook](docs/incident-playbook.md) | Symptom → Action mapping |
+| [Migration Roadmap](docs/migration-roadmap.md) | Kafka/CDC migration guide |
 
 ### Observability
 
 | Document | Purpose |
 |----------|---------|
-| [Observability Guide](/.agent/skills/transactional-outbox-architect/resources/observability-guide.md) | Full setup documentation |
-| [Grafana Dashboard](/.agent/skills/transactional-outbox-architect/resources/grafana-dashboard.json) | Import into Grafana |
-| [Prometheus Alerts](/.agent/skills/transactional-outbox-architect/resources/prometheus-alerting-rules.yaml) | P1-P4 alerting rules |
+| [Observability Guide](docs/observability-guide.md) | Full setup documentation |
+| [Grafana Dashboard](docs/grafana-dashboard.json) | Import into Grafana |
+| [Prometheus Alerts](docs/prometheus-alerting-rules.yaml) | P1-P4 alerting rules |
 
 ## 📜 License
 

@@ -128,4 +128,4 @@ Acesse: `http://localhost:3000`
 - [**Integração CERC (AP001)**](EXAMPLE_CERC.md): Fluxo completo envolvendo geração de arquivos, upload para S3 e resposta assíncrona.
 
 ---
-Para mais detalhes arquiteturais, veja o [README.md](../../README.md).
+Para mais detalhes arquiteturais, veja o [README.md](../README.md).
