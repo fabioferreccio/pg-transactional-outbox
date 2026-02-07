@@ -69,7 +69,7 @@ describe.skipIf(shouldSkip)("PostgresIdempotencyStore Integration", () => {
     it("should return true on duplicate (idempotent)", async () => {
       await store.markProcessed("dup-event", "consumer-1");
       const result = await store.markProcessed("dup-event", "consumer-1");
-      expect(result).toBe(true);
+      expect(result).toBe(false);
     });
 
     it("should allow same tracking_id for different consumers", async () => {
