@@ -1,6 +1,6 @@
 {
   "name": "pg-transactional-outbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Production-grade Transactional Outbox Framework for PostgreSQL",
   "type": "module",
   "main": "dist/main/index.js",
