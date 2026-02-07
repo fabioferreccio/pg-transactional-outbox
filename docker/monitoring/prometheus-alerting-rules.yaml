@@ -1,0 +1,304 @@
+# Prometheus Alerting Rules for Transactional Outbox
+#
+# Add to your Prometheus configuration:
+# rule_files:
+#   - /path/to/outbox-alerting-rules.yaml
+
+groups:
+  # ============================================
+  # CRITICAL ALERTS (P1) - Immediate Action
+  # ============================================
+  - name: outbox.critical
+    interval: 30s
+    rules:
+      # Queue completely stalled
+      - alert: OutboxQueueStalled
+        expr: |
+          pg_outbox_oldest_event_oldest_pending_seconds > 300
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Outbox queue stalled - oldest event > 5 minutes"
+          description: |
+            The oldest pending event in the outbox is {{ $value | humanizeDuration }} old.
+            This indicates the relay/worker has stopped processing.
+          runbook_url: "https://runbooks.example.com/outbox/queue-stalled"
+          dashboard: "https://grafana.example.com/d/outbox"
+
+      # No events processed in last 5 minutes
+      - alert: OutboxRelayDown
+        expr: |
+          increase(pg_outbox_throughput_completed_last_5m[5m]) == 0
+          and
+          pg_outbox_pending_depth_pending_count > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Outbox relay not processing events"
+          description: "No events have been completed in the last 5 minutes while {{ $value }} events are pending."
+          runbook_url: "https://runbooks.example.com/outbox/relay-down"
+
+      # Partition missing for tomorrow
+      - alert: OutboxPartitionMissing
+        expr: |
+          pg_outbox_partitions_partition_count < 2
+        for: 1m
+        labels:
+          severity: critical
+          team: dba
+        annotations:
+          summary: "Outbox partitions may be missing"
+          description: "Only {{ $value }} partitions exist. Check pg_partman maintenance."
+          runbook_url: "https://runbooks.example.com/outbox/partition-missing"
+
+      # Replication slot inactive (CDC failure)
+      - alert: OutboxReplicationSlotInactive
+        expr: |
+          pg_outbox_replication_lag_is_active == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "CDC replication slot {{ $labels.slot_name }} is inactive"
+          description: "Debezium or CDC connector may have crashed."
+          runbook_url: "https://runbooks.example.com/outbox/cdc-down"
+
+  # ============================================
+  # HIGH ALERTS (P2) - Action within 1 hour
+  # ============================================
+  - name: outbox.high
+    interval: 1m
+    rules:
+      # High backlog accumulation
+      - alert: OutboxBacklogHigh
+        expr: |
+          pg_outbox_pending_depth_pending_count > 10000
+        for: 5m
+        labels:
+          severity: high
+          team: platform
+        annotations:
+          summary: "Outbox backlog exceeds 10,000 events"
+          description: "Current backlog: {{ $value }} events. Check worker throughput."
+          runbook_url: "https://runbooks.example.com/outbox/backlog-high"
+
+      # Dead letter spike
+      - alert: OutboxDeadLetterSpike
+        expr: |
+          increase(pg_outbox_dead_letter_total_total_dead_letter[5m]) > 10
+        for: 1m
+        labels:
+          severity: high
+          team: platform
+        annotations:
+          summary: "Dead letter events spiking"
+          description: "{{ $value }} new dead letter events in 5 minutes."
+          runbook_url: "https://runbooks.example.com/outbox/dle-spike"
+
+      # High latency P95
+      - alert: OutboxLatencyHigh
+        expr: |
+          pg_outbox_latency_p95_latency_seconds > 30
+        for: 5m
+        labels:
+          severity: high
+          team: platform
+        annotations:
+          summary: "Outbox P95 latency exceeds 30 seconds"
+          description: "P95 latency: {{ $value | humanizeDuration }}"
+          runbook_url: "https://runbooks.example.com/outbox/latency-high"
+
+      # Autovacuum starvation
+      - alert: OutboxAutovacuumStarved
+        expr: |
+          pg_outbox_bloat_dead_tuples > 100000
+        for: 10m
+        labels:
+          severity: high
+          team: dba
+        annotations:
+          summary: "Outbox table has {{ $value }} dead tuples"
+          description: "Autovacuum may not be keeping up. Check vacuum settings."
+          runbook_url: "https://runbooks.example.com/outbox/vacuum-starved"
+
+      # Table bloat
+      - alert: OutboxTableBloat
+        expr: |
+          pg_outbox_bloat_dead_tuple_percent > 30
+        for: 15m
+        labels:
+          severity: high
+          team: dba
+        annotations:
+          summary: "Outbox table bloat at {{ $value }}%"
+          description: "Consider running VACUUM FULL during maintenance window."
+          runbook_url: "https://runbooks.example.com/outbox/bloat"
+
+      # CDC lag high
+      - alert: OutboxCDCLagHigh
+        expr: |
+          pg_outbox_replication_lag_lag_bytes > 104857600  # 100MB
+        for: 5m
+        labels:
+          severity: high
+          team: platform
+        annotations:
+          summary: "CDC replication lag exceeds 100MB"
+          description: "Slot {{ $labels.slot_name }} has {{ $value | humanize1024 }} lag."
+          runbook_url: "https://runbooks.example.com/outbox/cdc-lag"
+
+      # Processing events stuck
+      - alert: OutboxProcessingStuck
+        expr: |
+          pg_outbox_oldest_event_oldest_processing_seconds > 120
+        for: 2m
+        labels:
+          severity: high
+          team: platform
+        annotations:
+          summary: "Event stuck in PROCESSING for > 2 minutes"
+          description: "Possible zombie worker. Reaper should recover."
+          runbook_url: "https://runbooks.example.com/outbox/stuck-processing"
+
+  # ============================================
+  # MEDIUM ALERTS (P3) - Action within 4 hours
+  # ============================================
+  - name: outbox.medium
+    interval: 5m
+    rules:
+      # Stale events accumulating
+      - alert: OutboxStaleEventsAccumulating
+        expr: |
+          pg_outbox_pending_depth_stale_5m > 100
+        for: 10m
+        labels:
+          severity: medium
+          team: platform
+        annotations:
+          summary: "{{ $value }} events pending for > 5 minutes"
+          description: "Check worker health and downstream systems."
+          runbook_url: "https://runbooks.example.com/outbox/stale-events"
+
+      # Throughput drop
+      - alert: OutboxThroughputDrop
+        expr: |
+          pg_outbox_throughput_completed_last_5m 
+          < 
+          (avg_over_time(pg_outbox_throughput_completed_last_5m[1h]) * 0.5)
+        for: 15m
+        labels:
+          severity: medium
+          team: platform
+        annotations:
+          summary: "Outbox throughput dropped by > 50%"
+          description: "Current: {{ $value }} events/5min vs historical average."
+          runbook_url: "https://runbooks.example.com/outbox/throughput-drop"
+
+      # High retry events
+      - alert: OutboxHighRetryRate
+        expr: |
+          pg_outbox_backlog_total_retries{status="FAILED"} 
+          / 
+          pg_outbox_backlog_count{status="FAILED"} > 3
+        for: 10m
+        labels:
+          severity: medium
+          team: platform
+        annotations:
+          summary: "High average retry count in failed events"
+          description: "Average retries: {{ $value }}. Check error patterns."
+          runbook_url: "https://runbooks.example.com/outbox/high-retries"
+
+      # Vacuum hasn't run
+      - alert: OutboxVacuumDelayed
+        expr: |
+          pg_outbox_bloat_seconds_since_autovacuum > 3600
+        for: 5m
+        labels:
+          severity: medium
+          team: dba
+        annotations:
+          summary: "Outbox autovacuum hasn't run in {{ $value | humanizeDuration }}"
+          description: "Check PostgreSQL autovacuum settings."
+          runbook_url: "https://runbooks.example.com/outbox/vacuum-delayed"
+
+  # ============================================
+  # LOW ALERTS (P4) - Informational
+  # ============================================
+  - name: outbox.low
+    interval: 15m
+    rules:
+      # Any dead letter events
+      - alert: OutboxDeadLetterPresent
+        expr: |
+          pg_outbox_dead_letter_total_total_dead_letter > 0
+        for: 1m
+        labels:
+          severity: low
+          team: platform
+        annotations:
+          summary: "{{ $value }} dead letter events require attention"
+          description: "Review and redrive or discard after RCA."
+          runbook_url: "https://runbooks.example.com/outbox/dle-management"
+
+      # Table size growing
+      - alert: OutboxTableLarge
+        expr: |
+          pg_outbox_table_size_total_bytes > 10737418240  # 10GB
+        for: 1h
+        labels:
+          severity: low
+          team: dba
+        annotations:
+          summary: "Outbox table exceeds 10GB"
+          description: "Current size: {{ $value | humanize1024 }}. Review retention policy."
+          runbook_url: "https://runbooks.example.com/outbox/table-size"
+
+      # Sequence approaching limit (extremely rare)
+      - alert: OutboxSequenceExhaustion
+        expr: |
+          pg_outbox_sequence_remaining_ids < 1000000000000  # 1 trillion
+        for: 1h
+        labels:
+          severity: low
+          team: dba
+        annotations:
+          summary: "Outbox sequence has {{ $value | humanize }} IDs remaining"
+          description: "Plan for sequence reset or migration."
+
+  # ============================================
+  # RECORDING RULES (for dashboards)
+  # ============================================
+  - name: outbox.recording
+    interval: 1m
+    rules:
+      # Throughput rate
+      - record: outbox:events_per_second
+        expr: |
+          rate(pg_outbox_throughput_completed_last_1m[1m])
+
+      # Error rate
+      - record: outbox:error_rate_5m
+        expr: |
+          rate(pg_outbox_backlog_count{status="FAILED"}[5m])
+          /
+          rate(pg_outbox_backlog_count{status="COMPLETED"}[5m])
+
+      # Queue depth trend
+      - record: outbox:pending_depth_trend
+        expr: |
+          delta(pg_outbox_pending_depth_pending_count[10m])
+
+      # Availability (events being processed)
+      - record: outbox:availability
+        expr: |
+          1 - (
+            (pg_outbox_oldest_event_oldest_pending_seconds > 300) 
+            or 
+            vector(0)
+          )

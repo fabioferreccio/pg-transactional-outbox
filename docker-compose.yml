@@ -1,0 +1,189 @@
+# PostgreSQL Transactional Outbox with Tuning for High-Throughput
+#
+# Configured based on Capacity Model:
+# - max_wal_size: 2GB (reduces checkpoint frequency)
+# - checkpoint_timeout: 15min
+# - autovacuum tuned for high churn tables
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose logs -f postgres
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: outbox-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: outbox
+      POSTGRES_PASSWORD: outbox_secret
+      POSTGRES_DB: outbox
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db:/docker-entrypoint-initdb.d:ro
+
+    # High-throughput write tuning per Capacity Model
+    command:
+      - "postgres"
+      # === WAL & Checkpoints ===
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "min_wal_size=512MB"
+      - "-c"
+      - "checkpoint_timeout=15min"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=64MB"
+
+      # === Autovacuum (aggressive for outbox) ===
+      - "-c"
+      - "autovacuum_vacuum_scale_factor=0.01"
+      - "-c"
+      - "autovacuum_analyze_scale_factor=0.02"
+      - "-c"
+      - "autovacuum_vacuum_cost_limit=2000"
+      - "-c"
+      - "autovacuum_vacuum_cost_delay=2ms"
+      - "-c"
+      - "autovacuum_max_workers=4"
+
+      # === Memory ===
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "work_mem=16MB"
+
+      # === Connections ===
+      - "-c"
+      - "max_connections=200"
+
+      # === Logging ===
+      - "-c"
+      - "log_checkpoints=on"
+      - "-c"
+      - "log_autovacuum_min_duration=1000"
+      - "-c"
+      - "log_lock_waits=on"
+      - "-c"
+      - "log_statement=ddl"
+
+      # === Logical Replication (for CDC) ===
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U outbox -d outbox" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  # Optional: Debezium for CDC
+  # Uncomment to enable Change Data Capture
+  #
+  # zookeeper:
+  #   image: confluentinc/cp-zookeeper:7.5.0
+  #   environment:
+  #     ZOOKEEPER_CLIENT_PORT: 2181
+  #
+  # kafka:
+  #   image: confluentinc/cp-kafka:7.5.0
+  #   depends_on:
+  #     - zookeeper
+  #   environment:
+  #     KAFKA_BROKER_ID: 1
+  #     KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+  #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+  #     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  #
+  # debezium:
+  #   image: debezium/connect:2.4
+  #   depends_on:
+  #     - kafka
+  #     - postgres
+  #   environment:
+  #     BOOTSTRAP_SERVERS: kafka:9092
+  #     GROUP_ID: outbox-cdc
+  #     CONFIG_STORAGE_TOPIC: outbox_configs
+  #     OFFSET_STORAGE_TOPIC: outbox_offsets
+  #     STATUS_STORAGE_TOPIC: outbox_statuses
+  #   ports:
+  #     - "8083:8083"
+
+  # ============================================
+  # Monitoring Stack
+  # ============================================
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: outbox-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/monitoring/prometheus-alerting-rules.yaml:/etc/prometheus/alerting-rules.yaml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - postgres
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: outbox-postgres-exporter
+    restart: unless-stopped
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://outbox:outbox_secret@postgres:5432/outbox?sslmode=disable"
+    volumes:
+      - ./docker/monitoring/postgres-exporter-queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    command:
+      - "--extend.query-path=/etc/postgres_exporter/queries.yaml"
+    depends_on:
+      - postgres
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: outbox-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - ./docker/monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./docker/monitoring/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./docker/monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/outbox.json:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

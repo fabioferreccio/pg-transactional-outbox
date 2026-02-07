@@ -6,6 +6,10 @@
 
 > **Production-grade Transactional Outbox Framework** for guaranteed event delivery with PostgreSQL.
 
+### 📚 Documentação / Documentation
+- [📖 **Manual de Uso (Português)**](src/main/USAGE_GUIDE.md)
+- [📖 **Architecture Reference (English)**](#🏗️-architecture)
+
 ## 🎯 Why Transactional Outbox?
 
 ### The Dual-Write Problem

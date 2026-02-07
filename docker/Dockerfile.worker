@@ -1,0 +1,26 @@
+# Transactional Outbox Worker - Relay Process
+#
+# Dedicated image for the outbox relay worker
+
+FROM node:20-alpine
+
+RUN addgroup -g 1001 -S outbox && \
+    adduser -S outbox -u 1001 -G outbox
+
+WORKDIR /app
+
+COPY --chown=outbox:outbox package*.json ./
+RUN npm ci --production --ignore-scripts
+
+COPY --chown=outbox:outbox dist ./dist
+
+USER outbox
+
+ENV NODE_ENV=production
+ENV WORKER_MODE=relay
+
+# Worker-specific health check
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD node -e "console.log('Worker healthy')" || exit 1
+
+CMD ["node", "dist/main/worker.js"]

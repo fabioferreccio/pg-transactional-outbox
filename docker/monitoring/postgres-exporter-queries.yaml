@@ -1,0 +1,301 @@
+# postgres_exporter Custom Queries for Transactional Outbox
+# 
+# Add to postgres_exporter configuration:
+# --extend.query-path=/path/to/this/file.yaml
+#
+# Reference: https://github.com/prometheus-community/postgres_exporter
+
+# ============================================
+# OUTBOX BACKLOG METRICS
+# ============================================
+
+pg_outbox_backlog:
+  query: |
+    SELECT
+      status,
+      COUNT(*) AS count,
+      COALESCE(SUM(retry_count), 0) AS total_retries
+    FROM outbox
+    GROUP BY status
+  metrics:
+    - status:
+        usage: "LABEL"
+        description: "Event status"
+    - count:
+        usage: "GAUGE"
+        description: "Number of events by status"
+    - total_retries:
+        usage: "GAUGE"
+        description: "Total retry attempts by status"
+
+pg_outbox_pending_depth:
+  query: |
+    SELECT
+      COUNT(*) AS pending_count,
+      COUNT(*) FILTER (WHERE created_at < NOW() - INTERVAL '1 minute') AS stale_1m,
+      COUNT(*) FILTER (WHERE created_at < NOW() - INTERVAL '5 minutes') AS stale_5m,
+      COUNT(*) FILTER (WHERE created_at < NOW() - INTERVAL '15 minutes') AS stale_15m
+    FROM outbox
+    WHERE status = 'PENDING'
+  metrics:
+    - pending_count:
+        usage: "GAUGE"
+        description: "Total pending events"
+    - stale_1m:
+        usage: "GAUGE"
+        description: "Events pending for more than 1 minute"
+    - stale_5m:
+        usage: "GAUGE"
+        description: "Events pending for more than 5 minutes"
+    - stale_15m:
+        usage: "GAUGE"
+        description: "Events pending for more than 15 minutes"
+
+pg_outbox_oldest_event:
+  query: |
+    SELECT
+      COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at))), 0) AS oldest_pending_seconds,
+      COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at) FILTER (WHERE status = 'PROCESSING'))), 0) AS oldest_processing_seconds
+    FROM outbox
+    WHERE status IN ('PENDING', 'PROCESSING')
+  metrics:
+    - oldest_pending_seconds:
+        usage: "GAUGE"
+        description: "Age in seconds of oldest pending event"
+    - oldest_processing_seconds:
+        usage: "GAUGE"
+        description: "Age in seconds of oldest processing event"
+
+# ============================================
+# THROUGHPUT AND LATENCY
+# ============================================
+
+pg_outbox_throughput:
+  query: |
+    SELECT
+      COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '1 minute') AS completed_last_1m,
+      COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '5 minutes') AS completed_last_5m,
+      COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 minute') AS inserted_last_1m
+    FROM outbox
+    WHERE status = 'COMPLETED' OR created_at > NOW() - INTERVAL '5 minutes'
+  metrics:
+    - completed_last_1m:
+        usage: "GAUGE"
+        description: "Events completed in last minute"
+    - completed_last_5m:
+        usage: "GAUGE"
+        description: "Events completed in last 5 minutes"
+    - inserted_last_1m:
+        usage: "GAUGE"
+        description: "Events inserted in last minute"
+
+pg_outbox_latency:
+  query: |
+    SELECT
+      COALESCE(AVG(EXTRACT(EPOCH FROM (processed_at - created_at))), 0) AS avg_latency_seconds,
+      COALESCE(percentile_cont(0.50) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (processed_at - created_at))), 0) AS p50_latency_seconds,
+      COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (processed_at - created_at))), 0) AS p95_latency_seconds,
+      COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (processed_at - created_at))), 0) AS p99_latency_seconds
+    FROM outbox
+    WHERE status = 'COMPLETED'
+      AND processed_at > NOW() - INTERVAL '5 minutes'
+  metrics:
+    - avg_latency_seconds:
+        usage: "GAUGE"
+        description: "Average processing latency"
+    - p50_latency_seconds:
+        usage: "GAUGE"
+        description: "P50 processing latency"
+    - p95_latency_seconds:
+        usage: "GAUGE"
+        description: "P95 processing latency"
+    - p99_latency_seconds:
+        usage: "GAUGE"
+        description: "P99 processing latency"
+
+# ============================================
+# DEAD LETTER METRICS
+# ============================================
+
+pg_outbox_dead_letter:
+  query: |
+    SELECT
+      event_type,
+      COUNT(*) AS count,
+      MAX(retry_count) AS max_retries,
+      COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at))), 0) AS oldest_age_seconds
+    FROM outbox
+    WHERE status = 'DEAD_LETTER'
+    GROUP BY event_type
+  metrics:
+    - event_type:
+        usage: "LABEL"
+        description: "Event type"
+    - count:
+        usage: "GAUGE"
+        description: "Dead letter count by event type"
+    - max_retries:
+        usage: "GAUGE"
+        description: "Maximum retry count seen"
+    - oldest_age_seconds:
+        usage: "GAUGE"
+        description: "Age of oldest dead letter event"
+
+pg_outbox_dead_letter_total:
+  query: |
+    SELECT COUNT(*) AS total_dead_letter
+    FROM outbox
+    WHERE status = 'DEAD_LETTER'
+  metrics:
+    - total_dead_letter:
+        usage: "GAUGE"
+        description: "Total dead letter events"
+
+# ============================================
+# TABLE HEALTH METRICS
+# ============================================
+
+pg_outbox_table_size:
+  query: |
+    SELECT
+      pg_relation_size('outbox') AS table_bytes,
+      pg_indexes_size('outbox') AS indexes_bytes,
+      pg_total_relation_size('outbox') AS total_bytes
+  metrics:
+    - table_bytes:
+        usage: "GAUGE"
+        description: "Outbox table size in bytes"
+    - indexes_bytes:
+        usage: "GAUGE"
+        description: "Outbox indexes size in bytes"
+    - total_bytes:
+        usage: "GAUGE"
+        description: "Total outbox size including indexes"
+
+pg_outbox_bloat:
+  query: |
+    SELECT
+      n_live_tup AS live_tuples,
+      n_dead_tup AS dead_tuples,
+      CASE WHEN n_live_tup + n_dead_tup > 0 
+        THEN ROUND(100.0 * n_dead_tup / (n_live_tup + n_dead_tup), 2)
+        ELSE 0 
+      END AS dead_tuple_percent,
+      EXTRACT(EPOCH FROM (NOW() - last_autovacuum)) AS seconds_since_autovacuum,
+      autovacuum_count
+    FROM pg_stat_user_tables
+    WHERE relname = 'outbox'
+  metrics:
+    - live_tuples:
+        usage: "GAUGE"
+        description: "Number of live tuples"
+    - dead_tuples:
+        usage: "GAUGE"
+        description: "Number of dead tuples"
+    - dead_tuple_percent:
+        usage: "GAUGE"
+        description: "Percentage of dead tuples"
+    - seconds_since_autovacuum:
+        usage: "GAUGE"
+        description: "Seconds since last autovacuum"
+    - autovacuum_count:
+        usage: "COUNTER"
+        description: "Total autovacuum runs"
+
+# ============================================
+# PARTITION METRICS
+# ============================================
+
+pg_outbox_partitions:
+  query: |
+    SELECT
+      COUNT(*) AS partition_count,
+      COUNT(*) FILTER (WHERE created > NOW() - INTERVAL '7 days') AS recent_partitions,
+      COUNT(*) FILTER (WHERE created < NOW() - INTERVAL '30 days') AS old_partitions
+    FROM (
+      SELECT 
+        inhrelid::regclass AS partition_name,
+        (SELECT pg_stat_file(pg_relation_filepath(inhrelid))).creation AS created
+      FROM pg_inherits
+      WHERE inhparent = 'outbox'::regclass
+    ) partitions
+  metrics:
+    - partition_count:
+        usage: "GAUGE"
+        description: "Total number of partitions"
+    - recent_partitions:
+        usage: "GAUGE"
+        description: "Partitions created in last 7 days"
+    - old_partitions:
+        usage: "GAUGE"
+        description: "Partitions older than 30 days"
+
+# ============================================
+# REPLICATION / CDC METRICS
+# ============================================
+
+pg_outbox_replication_lag:
+  query: |
+    SELECT
+      slot_name,
+      active::int AS is_active,
+      COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn), 0) AS lag_bytes,
+      COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn), 0) AS pending_bytes
+    FROM pg_replication_slots
+    WHERE slot_type = 'logical'
+  metrics:
+    - slot_name:
+        usage: "LABEL"
+        description: "Replication slot name"
+    - is_active:
+        usage: "GAUGE"
+        description: "Whether slot is active (1) or not (0)"
+    - lag_bytes:
+        usage: "GAUGE"
+        description: "Replication lag in bytes"
+    - pending_bytes:
+        usage: "GAUGE"
+        description: "Pending WAL bytes to be confirmed"
+
+# ============================================
+# SEQUENCE METRICS
+# ============================================
+
+pg_outbox_sequence:
+  query: |
+    SELECT
+      last_value,
+      CASE WHEN is_called THEN last_value ELSE 0 END AS current_value,
+      -- Estimate remaining IDs for BIGINT (9.2e18) - alert on approaching limit
+      9223372036854775807 - last_value AS remaining_ids
+    FROM outbox_id_seq
+  metrics:
+    - last_value:
+        usage: "GAUGE"
+        description: "Last sequence value"
+    - current_value:
+        usage: "GAUGE"
+        description: "Current sequence value"
+    - remaining_ids:
+        usage: "GAUGE"
+        description: "Remaining IDs until exhaustion"
+
+# ============================================
+# WORKER METRICS (via advisory locks)
+# ============================================
+
+pg_outbox_workers:
+  query: |
+    SELECT
+      COUNT(*) FILTER (WHERE granted) AS active_workers,
+      COUNT(*) FILTER (WHERE NOT granted) AS waiting_workers
+    FROM pg_locks
+    WHERE locktype = 'advisory'
+      AND classid = 1234567890  -- Use your worker lock namespace
+  metrics:
+    - active_workers:
+        usage: "GAUGE"
+        description: "Number of active workers with advisory locks"
+    - waiting_workers:
+        usage: "GAUGE"
+        description: "Number of workers waiting for locks"
